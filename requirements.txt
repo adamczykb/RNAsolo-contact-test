@@ -1,0 +1,2 @@
+RNApolis==0.1.3
+biopython==1.83
