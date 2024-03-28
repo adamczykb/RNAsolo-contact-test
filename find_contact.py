@@ -40,6 +40,7 @@ def molecule_chain_assigment(structure):
     result_molecule_type = {}
     for model in structure:
         distribution[model.id] = {}
+        result_molecule_type[model.id]={}
         for chain in model:
             distribution[model.id][chain.id] = {"RNA": 0, "DNA": 0, "Protein": 0}
             for residue in chain:
@@ -243,7 +244,7 @@ def split_structure_to_hermetic_chains(
 ):
     structure = PDBParser(PERMISSIVE=0, QUIET=True).get_structure("str", pdb_file_path)
     distribution = molecule_distribution(structure)
-    for idx, molecule in ["RNA", "DNA", "PROT"]:
+    for idx, molecule in enumerate(["RNA", "DNA", "PROT"]):
         local_struct = copy.deepcopy(structure)
         io = PDBIO()
         io.set_structure(local_struct)
@@ -251,9 +252,9 @@ def split_structure_to_hermetic_chains(
 
 
 def find_contact_hybrid_ligand_protein():
-    chains = ["B"]
+    chains = ["A"]
     model = "1"
-    pdb_id = "6I0V".lower()
+    pdb_id = "7KUB".lower()
     with NamedTemporaryFile(suffix=".pdb") as pdb_file:
         get_pdb_file(pdb_id, chains, pdb_file.name)
         structure_filter(pdb_file.name, ModelsSelect(model))
@@ -272,7 +273,9 @@ def find_contact_hybrid_ligand_protein():
             stdout=subprocess.PIPE,
             shell=True,
         )
-        filter_hydrogen_bound.communicate()[0].decode("utf-8")  # save?
+        a = NamedTemporaryFile(suffix=".tsv",delete=False)
+        a.write(filter_hydrogen_bound.communicate()[0][3:])  # save?
+        a.close()
 
         p1 = subprocess.Popen(
             f"awk -vrna_chains='{','.join(chains)}' -f /opt/filter-residues.awk < '{pdb_file.name.split('.')[0]}.hb2' ",
@@ -316,12 +319,6 @@ def find_contact_hybrid_ligand_protein():
 
 
 if __name__ == "__main__":
-    molecule = "CR"
-    match molecule:
-        case "CR":
-            find_contact_hybrid_ligand_protein()
-        case "H":
-            find_contact_hybrid_ligand_protein()
-        case "A":
-            # find_contact_hybrid_ligand_protein()
-            find_contact_ion()
+
+    find_contact_hybrid_ligand_protein()
+            # find_contact_ion()
