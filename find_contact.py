@@ -117,15 +117,15 @@ class ChainsSelect(Select):
         self.chains = set(c)
         self.modified_atoms = modified_atoms
 
-    def accept_residue(self, residue):
-        return (residue.id[0] == " " and self.modified_atoms) or not self.modified_atoms
+    # def accept_residue(self, residue):
+    #     return (residue.id[0] == " " and self.modified_atoms) or not self.modified_atoms
 
     def accept_chain(
         self,
         chain,
     ):
         # do I have to leave modified atoms
-        return chain in self.chains
+        return chain.id in self.chains
 
 
 class ResiduesSelect(Select):
@@ -239,7 +239,7 @@ def find_contact_ion():
 
 
 def split_structure_to_hermetic_chains(
-    pdb_file_path, files_paths: tuple(str, str, str)
+    pdb_file_path, files_paths
 ):
     structure = PDBParser(PERMISSIVE=0, QUIET=True).get_structure("str", pdb_file_path)
     distribution = molecule_distribution(structure)
