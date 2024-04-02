@@ -1,1 +1,7 @@
 fingernat/ 
+*.pdb
+*.cif
+*.tsv
+*.hb2
+*.dat
+*.pyc
