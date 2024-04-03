@@ -12,6 +12,8 @@ from Bio.PDB import MMCIFParser
 from Bio.PDB import PDBIO
 from Bio.PDB.mmcifio import MMCIFIO
 from enum import Enum
+
+
 class ProcessingException(Exception):
     pass
 
@@ -45,6 +47,7 @@ PROTEIN_DICT = [
     "TYR",
     "VAL",
 ]
+
 
 def molecule_chain_assigment(structure: Bio.PDB.Structure) -> Tuple[dict, dict]:
     """
@@ -172,8 +175,13 @@ def structure_filter(pdb_file_path: str, selector: Select):
     io.set_structure(structure)
     io.save(pdb_file_path, selector)
 
+def structure_cif_filter(cif_file_path: str, selector: Select):
+    structure = MMCIFParser(QUIET=True).get_structure("str", cif_file_path)
+    io = MMCIFIO()
+    io.set_structure(structure)
+    io.save(cif_file_path, selector)
 
-def get_file(pdb_id: str, model_id: int) -> FileType:
+def get_file(pdb_id: str, model_id: int, file_type: FileType = None) -> FileType:
     """
     Get structure file from rcsb.org
 
@@ -184,35 +192,58 @@ def get_file(pdb_id: str, model_id: int) -> FileType:
     Returns:
             result_molecule_type (dict): Dict of molecule affilation for each model and chain
     """
-    response = requests.get(
-        f"https://files.rcsb.org/download/{pdb_id}.pdb", timeout=5000
-    )
-    if response.status_code != 200:
+    def get_cif():
         response = requests.get(
                 f"https://files.rcsb.org/download/{pdb_id}.cif", timeout=5000
             )
         if response.status_code != 200:
-                raise ProcessingException("Cannot get structure")
-        with NamedTemporaryFile(suffix=".cif",delete=False) as cif_file:
+            raise ProcessingException("Cannot get structure")
+        with NamedTemporaryFile(suffix=".cif", delete=False) as cif_file:
             with open(cif_file.name, "wb") as result_file:
                 result_file.write(response.content)
             io = MMCIFIO()
             parser = MMCIFParser(QUIET=True)
             io.set_structure(parser.get_structure("str", cif_file.name))
             io.save(cif_file.name, ModelsSelect(model_id))
-            return cif_file.name,FileType.CIF
+            return cif_file.name, FileType.CIF
+    def get_pdb():  
+        response = requests.get(
+            f"https://files.rcsb.org/download/{pdb_id}.pdb", timeout=5000
+        )
+        with NamedTemporaryFile(suffix=".pdb", delete=False) as pdb_file:
+                with open(pdb_file.name, "wb") as result_file:
+                    result_file.write(response.content)
+                structure_filter(pdb_file.name, ModelsSelect(model_id))
+                return pdb_file.name, FileType.PDB
+    if file_type is None:
+        response = requests.get(
+            f"https://files.rcsb.org/download/{pdb_id}.pdb", timeout=5000
+        )
+        if response.status_code != 200:
+            return get_cif()
+        else:
+            with NamedTemporaryFile(suffix=".pdb", delete=False) as pdb_file:
+                with open(pdb_file.name, "wb") as result_file:
+                    result_file.write(response.content)
+                structure_filter(pdb_file.name, ModelsSelect(model_id))
+                return pdb_file.name, FileType.PDB
     else:
-        with NamedTemporaryFile(suffix=".pdb",delete=False) as pdb_file:
-            with open(pdb_file.name, "wb") as result_file:
-                result_file.write(response.content)
-            structure_filter(pdb_file.name, ModelsSelect(model_id))
-            return pdb_file.name,FileType.PDB
+        match file_type:
+            case FileType.PDB:
+                return get_pdb()
+            case FileType.CIF:
+                return get_cif()
 
-def split_structure_to_hermetic_chains(pdb_file_path, files_paths):
-    structure = PDBParser(PERMISSIVE=0, QUIET=True).get_structure("str", pdb_file_path)
+
+def split_structure_to_hermetic_chains(cif_file_path, files_paths,model):
+    structure = MMCIFParser(QUIET=True).get_structure("str", cif_file_path)
     distribution = structure_chain_molecules(structure)
+    print(distribution)
     for idx, molecule in enumerate(["RNA", "DNA", "PROT"]):
         local_struct = copy.deepcopy(structure)
-        io = PDBIO()
+        io = MMCIFIO()
         io.set_structure(local_struct)
-        io.save(files_paths[idx], ChainsSelect(distribution[molecule]))
+        try:
+            io.save(files_paths[idx], ChainsSelect(distribution[molecule][model-1]))
+        except:
+            pass

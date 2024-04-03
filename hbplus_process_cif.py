@@ -10,6 +10,8 @@ import io as inputoutput
 import uuid
 from typing import List, Tuple
 from tempfile import NamedTemporaryFile
+
+import requests
 from contact_utils import ChainsSelect, ProcessingException
 from show_chain_molecule_type_CIF import calc
 from Bio.PDB import MMCIFParser
@@ -37,10 +39,8 @@ TSV_COLUMNS = [
 ]
 
 
-def init_processing_locks(lpymol, lfile):
-    global lockpymol
+def init_processing_locks( lfile):
     global lockfile
-    lockpymol = lpymol
     lockfile = lfile
 
 
@@ -99,11 +99,13 @@ def process_append_result(
             struct_dict["_atom_site.auth_asym_id"] = temp_list
             io.set_dict(struct_dict)
             io.save(temp_file_cif.name)
+            response = requests.post("http://tomek:8080",headers={'Content-Type': 'text/plain'},data=open(temp_file_cif.name, 'rb'),timeout=10000)
+            if response.status_code==200:
+                with open(temp_file_pdb.name,'wb') as pdb_file_output:
+                    pdb_file_output.write(response.content)
 
-            with lockpymol:
-                cmd.delete("all")
-                cmd.load(temp_file_cif.name, quiet=1)
-                cmd.save(temp_file_pdb.name, quiet=1)
+            else:
+                raise ProcessingException("Parsing cif error")
             try:
                 os.remove("hbdebug.dat")
             except Exception:
@@ -166,12 +168,12 @@ def process_append_result(
                     .str.replace(r"^D", dna_prot_residue, regex=True)
                 )
                 with lockfile:
-                    with NamedTemporaryFile() as tmpFile:
+                    with NamedTemporaryFile() as tmp_file:
                         with open(output_file_path, "ab") as otsv:
-                            df.to_csv(tmpFile.name, sep="\t")
+                            df.to_csv(tmp_file.name, sep="\t")
                             otsv.write(
                                 "".join(
-                                    [i.decode() for i in tmpFile.readlines()[1:]]
+                                    [i.decode() for i in tmp_file.readlines()[1:]]
                                 ).encode()
                             )
             p1 = subprocess.Popen(
@@ -239,7 +241,6 @@ def get_hbplus_result_for_large_structure(
     """
     structure, molecule_chains = calc(cif_path)
 
-    lock = Lock()
     lock_hb = Lock()
     jobs = []
 
@@ -255,7 +256,6 @@ def get_hbplus_result_for_large_structure(
     with Pool(
         initializer=init_processing_locks,
         initargs=(
-            lock,
             lock_hb,
         ),
     ) as pool:
