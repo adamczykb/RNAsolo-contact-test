@@ -1,8 +1,9 @@
-import copy
+from enum import Enum
 import os
 import shutil
 import subprocess
 import time
+import traceback
 import numpy as np
 import os
 import pandas as pd
@@ -12,15 +13,20 @@ from typing import List, Tuple
 from tempfile import NamedTemporaryFile
 
 import requests
-from contact_utils import ChainsSelect, ProcessingException
+from contact_utils import (
+    DNA_DICT,
+    PROTEIN_DICT,
+    RNA_DICT,
+    ChainsSelect,
+    ProcessingException,
+)
 from show_chain_molecule_type_CIF import calc
 from Bio.PDB import MMCIFParser
 from Bio.PDB import PDBIO
 from Bio.PDB.mmcifio import MMCIFIO
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from pymol import cmd
 from multiprocessing import Lock, Pool
- 
+
 
 TSV_COLUMNS = [
     "donor",
@@ -39,13 +45,39 @@ TSV_COLUMNS = [
 ]
 
 
-def init_processing_locks( lfile):
+class MoleculeType(Enum):
+    DNA = 0
+    RNA = 1
+    LIGAND = 2
+    ION = 3
+    PROTEIN = 4
+
+
+def check_molecule(residue):
+    hetflag, resseq, icode = residue.get_id()
+    if hetflag != " " and hetflag != "W" and len(residue)>1:
+        return MoleculeType.LIGAND
+    
+    if hetflag != " " and hetflag != "W" and len(residue)==1:
+        return MoleculeType.ION
+    
+    if residue.resname in DNA_DICT:
+        return MoleculeType.DNA
+
+    if residue.resname in RNA_DICT:
+        return MoleculeType.RNA
+
+    if residue.resname in PROTEIN_DICT:
+        return MoleculeType.PROTEIN
+
+
+def init_processing_locks(lfile):
     global lockfile
     lockfile = lfile
 
 
 def process_append_result(
-    rna_residue, dna_prot_residue, output_file_path, stucture_file_path
+    rna_residue, dna_prot_lig_residue, output_file_path, stucture_file_path
 ):
     """
     Single instance process function for async multiprocessing
@@ -55,40 +87,40 @@ def process_append_result(
 
     Parameters:
             rna_residue (str): Residue of RNA to find hydrogen bond
-            dna_prot_residue (str): Residue of DNA/Protein to find hydrogen bond
+            dna_prot_lig_residue (str): Residue of DNA/Protein/Ligand to find hydrogen bond
             output_file_path (str): Global path to store tsv result
             stucture_file_path (str): Global path to cif file
 
     Returns:
             local_in_contact (set): Set of residues in contact both RNA and DNA/PROT
     """
-    local_in_contact = []
+    in_contact_description = dict()
     io = MMCIFIO()
     parser = MMCIFParser(QUIET=True)
     io.set_structure(parser.get_structure("str", stucture_file_path)[0])
-    op_dir = f"/tmp/{str(uuid.uuid4()).split('-',maxsplit=1)[0]}_{rna_residue}_{dna_prot_residue}_processing"
-    shutil.rmtree(
-        op_dir, ignore_errors=True
-    )
+    op_dir = f"/tmp/{str(uuid.uuid4()).split('-',maxsplit=1)[0]}_{rna_residue}_{dna_prot_lig_residue}_processing"
+    shutil.rmtree(op_dir, ignore_errors=True)
     os.mkdir(op_dir)
     os.chdir(op_dir)
-    with NamedTemporaryFile(suffix=f"_{dna_prot_residue}.pdb") as temp_file_pdb:
-        with NamedTemporaryFile(suffix=f"_{dna_prot_residue}.cif") as temp_file_cif:
-            io.save(temp_file_cif.name, ChainsSelect([rna_residue, dna_prot_residue]))
+    with NamedTemporaryFile(suffix=f"_{dna_prot_lig_residue}.pdb") as temp_file_pdb:
+        with NamedTemporaryFile(suffix=f"_{dna_prot_lig_residue}.cif",delete=False) as temp_file_cif:
+            io.save(temp_file_cif.name, ChainsSelect([rna_residue, dna_prot_lig_residue]))
+
             struct_dict = MMCIF2Dict(temp_file_cif.name)
             temp_list = np.array(struct_dict["_atom_site.auth_asym_id"])
+            struct_dict["_atom_site.label_seq_id"]=struct_dict["_atom_site.auth_seq_id"]
 
-            if dna_prot_residue != "R" and rna_residue != "D":
+            if dna_prot_lig_residue != "R" and rna_residue != "D":
                 temp_list = np.where(
                     temp_list == rna_residue,
                     "R",
-                    np.where(temp_list == dna_prot_residue, "D", temp_list),
+                    np.where(temp_list == dna_prot_lig_residue, "D", temp_list),
                 )
             else:
                 temp_list = np.where(
                     temp_list == rna_residue,
                     "RNA",
-                    np.where(temp_list == dna_prot_residue, "DNA_PROT", temp_list),
+                    np.where(temp_list == dna_prot_lig_residue, "DNA_PROT", temp_list),
                 )
                 temp_list = np.where(
                     temp_list == "RNA",
@@ -99,9 +131,14 @@ def process_append_result(
             struct_dict["_atom_site.auth_asym_id"] = temp_list
             io.set_dict(struct_dict)
             io.save(temp_file_cif.name)
-            response = requests.post("http://tomek:8080",headers={'Content-Type': 'text/plain'},data=open(temp_file_cif.name, 'rb'),timeout=10000)
-            if response.status_code==200:
-                with open(temp_file_pdb.name,'wb') as pdb_file_output:
+            response = requests.post(
+                "http://tomek:8080",
+                headers={"Content-Type": "text/plain"},
+                data=open(temp_file_cif.name, "rb"),
+                timeout=10000,
+            )
+            if response.status_code == 200:
+                with open(temp_file_pdb.name, "wb") as pdb_file_output:
                     pdb_file_output.write(response.content)
 
             else:
@@ -156,17 +193,63 @@ def process_append_result(
                     inputoutput.StringIO(result),
                     names=TSV_COLUMNS,
                 ).replace(-1, np.nan)
+                structure_to_analyze = parser.get_structure("str", stucture_file_path)[
+                    0
+                ]
+                for index, row in df.iterrows():
+                    
+                    if row["donor"][0] == "R" and row["acceptor"][0] != "R":
+                        key=f'{rna_residue}.{int("".join(row["donor"][1:]).split("-", maxsplit=1)[0])}' 
+                        if rna_residue not in in_contact_description.keys():
+                            in_contact_description[
+                            key 
+                            ] = []
+                        res_id = int(
+                            "".join(row["acceptor"][1:]).split("-", maxsplit=1)[0]
+                        )
+                        try:
+                            residue = structure_to_analyze[dna_prot_lig_residue][res_id]
+                        except KeyError:
+                            residue = structure_to_analyze[dna_prot_lig_residue][(f'H_{"".join(row["acceptor"][1:]).split("-", maxsplit=1)[1]}',res_id,' ')]
+                        in_contact_description[
+                            key
+                        ].append(
+                            (
+                                f"{dna_prot_lig_residue}.{res_id}",residue.resname, check_molecule(residue)
+                            )
+                        )
+                    elif row["donor"][0] != "R" and row["acceptor"][0] == "R":
+                        key=f'{rna_residue}.{int("".join(row["acceptor"][1:]).split("-", maxsplit=1)[0])}'
+                        if rna_residue not in in_contact_description.keys():
+                            in_contact_description[
+                                key
+                            ] = []
+                        res_id = int(
+                            "".join(row["donor"][1:]).split("-", maxsplit=1)[0]
+                        )
+                        try:
+                            residue = structure_to_analyze[dna_prot_lig_residue][res_id]
+                        except KeyError:
+                            residue = structure_to_analyze[dna_prot_lig_residue][(f'H_{"".join(row["donor"][1:]).split("-", maxsplit=1)[1]}',res_id,' ')]
+                        in_contact_description[
+                            key
+                        ].append(
+                            (
+                                f"{dna_prot_lig_residue}.{res_id}",residue.resname, check_molecule(residue)
+                            )
+                        )
 
                 df["donor"] = (
                     df["donor"]
                     .str.replace(r"^R", rna_residue, regex=True)
-                    .str.replace(r"^D", dna_prot_residue, regex=True)
+                    .str.replace(r"^D", dna_prot_lig_residue, regex=True)
                 )
                 df["acceptor"] = (
                     df["acceptor"]
                     .str.replace(r"^R", rna_residue, regex=True)
-                    .str.replace(r"^D", dna_prot_residue, regex=True)
+                    .str.replace(r"^D", dna_prot_lig_residue, regex=True)
                 )
+
                 with lockfile:
                     with NamedTemporaryFile() as tmp_file:
                         with open(output_file_path, "ab") as otsv:
@@ -214,15 +297,13 @@ def process_append_result(
                     local_in_contact, np.where(local_in_contact == "")
                 )
                 local_in_contact = np.char.replace(
-                    local_in_contact, "D", dna_prot_residue
+                    local_in_contact, "D", dna_prot_lig_residue
                 )
                 local_in_contact = np.char.replace(local_in_contact, "R", rna_residue)
             except:
                 pass
-    shutil.rmtree(
-        op_dir, ignore_errors=True
-    )
-    return local_in_contact
+    shutil.rmtree(op_dir, ignore_errors=True)
+    return local_in_contact,in_contact_description
 
 
 def get_hbplus_result_for_large_structure(
@@ -245,6 +326,7 @@ def get_hbplus_result_for_large_structure(
     jobs = []
 
     in_contact = set()
+    in_contact_desc = dict()
     output_file = NamedTemporaryFile(
         suffix=f"{cif_path.split('/')[-1]}.tsv", delete=False
     )
@@ -252,17 +334,18 @@ def get_hbplus_result_for_large_structure(
         columns=TSV_COLUMNS,
     )
     df.to_csv(output_file.name, sep="\t")
+    print(molecule_chains)
 
     with Pool(
+        processes=14,
         initializer=init_processing_locks,
-        initargs=(
-            lock_hb,
-        ),
+        initargs=(lock_hb,),
     ) as pool:
         for rna in rna_chains:
             for dna_prot in (
                 molecule_chains[list(structure.get_models())[0].id]["DNA"]
                 + molecule_chains[list(structure.get_models())[0].id]["Protein"]
+                + molecule_chains[list(structure.get_models())[0].id]["Ligand"]
             ):
                 p = pool.apply_async(
                     process_append_result,
@@ -286,7 +369,15 @@ def get_hbplus_result_for_large_structure(
                     f"Workers raised following exceptions {[result._value for result in jobs if not result.successful()]}"
                 )
         for p in jobs:
-            in_contact.update(p.get())
+            res = p.get()
+            in_contact.update(res[0])
+            for key, value in res[1].items():
+                if key in in_contact_desc:
+                    in_contact_desc[key].extend(value)
+                else:
+                    in_contact_desc[key] = value
+
+
 
         df = pd.read_csv(output_file.name, sep="\t")
         df.drop(["hydrogen_bonds_no", "Unnamed: 0"], axis=1, inplace=True)
@@ -294,4 +385,4 @@ def get_hbplus_result_for_large_structure(
         df.rename(columns={"index": "hydrogen_bonds_no"}, inplace=True)
         df["hydrogen_bonds_no"] += 1
         df.to_csv(output_file.name, sep="\t", index=False)
-        return output_file.name, in_contact
+        return output_file.name, in_contact, in_contact_desc

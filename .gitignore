@@ -1,7 +1,9 @@
-fingernat/ 
+fingernat/*
 *.pdb
 *.cif
 *.tsv
 *.hb2
 *.dat
 *.pyc
+fingernat/
+!fingeRNAt.py

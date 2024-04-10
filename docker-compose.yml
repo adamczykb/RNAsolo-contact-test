@@ -1,0 +1,16 @@
+version: "3.9"
+
+name: rnasolo_test
+services:      
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rnasolo_test:0.1
+    restart: always
+    volumes:
+      - .:/local
+  tomek:
+    image: tzok/maxit:server
+    ports:
+     - 8080:8080

@@ -1,5 +1,6 @@
 import copy
 import Bio
+import numpy as np
 import requests
 
 
@@ -8,11 +9,11 @@ from Bio.PDB import PDBIO, Select
 from Bio.PDB.PDBParser import PDBParser
 
 from typing import Tuple
+from Bio.PDB.mmcifio import MMCIFIO
 from Bio.PDB import MMCIFParser
 from Bio.PDB import PDBIO
-from Bio.PDB.mmcifio import MMCIFIO
 from enum import Enum
-
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 
 class ProcessingException(Exception):
     pass
@@ -129,44 +130,46 @@ def structure_chain_molecules(structure):
 
 
 class ModelsSelect(Select):
-    def __init__(self, m):
+    def __init__(self, m, save_ions=False,ligands =True):
         self.models = int(m)
+        self.save_ions = save_ions
+        self.ligands = ligands
 
-    def accept_residue(self, residue):
-        # do I have to leave modified atoms
-        return (
-            residue.get_parent().get_parent().id + 1
-            == self.models
-            # and residue.id[0] == " "
-        )
+    def accept_residue(self, residue):     
+        return (residue.get_parent().get_parent().id + 1 == self.models and residue.id[0] == " ") or  \
+            (residue.get_parent().get_parent().id + 1 == self.models and residue.id[0] != "W" and self.ligands) or \
+                (residue.get_parent().get_parent().id + 1 == self.models and self.save_ions and residue.id[0] != "W" and residue.id[0]!=" ")
 
 
 class ChainsSelect(Select):
-    def __init__(self, c, modified_atoms=False):
+    def __init__(self, c, save_ions=False,ligands =True):
         self.chains = set(c)
-        self.modified_atoms = modified_atoms
+        self.save_ions = save_ions
+        self.ligands = ligands
 
     # def accept_residue(self, residue):
     #     return (residue.id[0] == " " and self.modified_atoms) or not self.modified_atoms
 
-    def accept_chain(
-        self,
-        chain,
-    ):
-        # do I have to leave modified atoms
-        return chain.id in self.chains
-
+    # def accept_chain(
+    #     self,
+    #     chain,
+    # ):
+    #     # do I have to leave modified atoms
+    #     return chain.id in self.chains 
+    def accept_residue(self, residue):
+        return  (residue.get_parent().id in self.chains and residue.id[0] != "W") or  \
+            (residue.get_parent().id in self.chains and residue.id[0] != "W" and self.ligands and len(residue)>1) or \
+                (self.save_ions and residue.id[0] != "W" and residue.id[0]!=" " and len(residue)==1)
 
 class ResiduesSelect(Select):
-    def __init__(self, r):
+    def __init__(self, r,ligands =True):
         self.residues = set(r)
-
+        self.ligands=ligands
     def accept_residue(self, residue):
-        # do I have to leave modified atoms
         res_id = residue.get_parent().id + str(residue.id[1])
         if residue.id[2] != " ":
             res_id = res_id + residue.id[2]
-        return res_id in self.residues
+        return (res_id in self.residues and self.ligands) or (residue.id[0] == " " and not self.ligands and res_id in self.residues)
 
 
 def structure_filter(pdb_file_path: str, selector: Select):
@@ -181,7 +184,7 @@ def structure_cif_filter(cif_file_path: str, selector: Select):
     io.set_structure(structure)
     io.save(cif_file_path, selector)
 
-def get_file(pdb_id: str, model_id: int, file_type: FileType = None) -> FileType:
+def get_file(pdb_id: str, model_id: int=0, file_type: FileType = None,save_ions=False,ligands =True) -> FileType:
     """
     Get structure file from rcsb.org
 
@@ -199,13 +202,22 @@ def get_file(pdb_id: str, model_id: int, file_type: FileType = None) -> FileType
         if response.status_code != 200:
             raise ProcessingException("Cannot get structure")
         with NamedTemporaryFile(suffix=".cif", delete=False) as cif_file:
-            with open(cif_file.name, "wb") as result_file:
-                result_file.write(response.content)
-            io = MMCIFIO()
-            parser = MMCIFParser(QUIET=True)
-            io.set_structure(parser.get_structure("str", cif_file.name))
-            io.save(cif_file.name, ModelsSelect(model_id))
-            return cif_file.name, FileType.CIF
+                with open(cif_file.name, "wb") as result_file:
+                    result_file.write(response.content)
+
+                # io = MMCIFIO()
+                # parser = MMCIFParser(QUIET=True)
+                # struct_dict = MMCIF2Dict(cif_file.name)
+                # struct_dict["_atom_site.label_seq_id"]=struct_dict["_atom_site.auth_seq_id"]
+                # io.set_dict(struct_dict)
+                # io.save(cif_file.name)
+
+                if model_id>0:
+                    io = MMCIFIO()
+                    parser = MMCIFParser(QUIET=True)
+                    io.set_structure(parser.get_structure("str", cif_file.name))
+                    io.save(cif_file.name, ModelsSelect(model_id,save_ions=save_ions,ligands=ligands))
+                return cif_file.name, FileType.CIF
     def get_pdb():  
         response = requests.get(
             f"https://files.rcsb.org/download/{pdb_id}.pdb", timeout=5000
@@ -213,7 +225,7 @@ def get_file(pdb_id: str, model_id: int, file_type: FileType = None) -> FileType
         with NamedTemporaryFile(suffix=".pdb", delete=False) as pdb_file:
                 with open(pdb_file.name, "wb") as result_file:
                     result_file.write(response.content)
-                structure_filter(pdb_file.name, ModelsSelect(model_id))
+                structure_filter(pdb_file.name, ModelsSelect(model_id,save_ions=save_ions,ligands=ligands))
                 return pdb_file.name, FileType.PDB
     if file_type is None:
         response = requests.get(
@@ -225,7 +237,7 @@ def get_file(pdb_id: str, model_id: int, file_type: FileType = None) -> FileType
             with NamedTemporaryFile(suffix=".pdb", delete=False) as pdb_file:
                 with open(pdb_file.name, "wb") as result_file:
                     result_file.write(response.content)
-                structure_filter(pdb_file.name, ModelsSelect(model_id))
+                structure_filter(pdb_file.name, ModelsSelect(model_id,save_ions=save_ions,ligands=ligands))
                 return pdb_file.name, FileType.PDB
     else:
         match file_type:
@@ -238,12 +250,12 @@ def get_file(pdb_id: str, model_id: int, file_type: FileType = None) -> FileType
 def split_structure_to_hermetic_chains(cif_file_path, files_paths,model):
     structure = MMCIFParser(QUIET=True).get_structure("str", cif_file_path)
     distribution = structure_chain_molecules(structure)
-    print(distribution)
+
     for idx, molecule in enumerate(["RNA", "DNA", "PROT"]):
         local_struct = copy.deepcopy(structure)
         io = MMCIFIO()
         io.set_structure(local_struct)
         try:
-            io.save(files_paths[idx], ChainsSelect(distribution[molecule][model-1]))
+            io.save(files_paths[idx], ChainsSelect(distribution[molecule][model-1],ligands=True))
         except:
             pass
