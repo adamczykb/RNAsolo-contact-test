@@ -91,7 +91,7 @@ def get_filtered_hydrogen_bonds(
         df.to_csv(output_tsv_path, sep="\t", index=False)
 
 
-def get_residue_in_contact(pdb_path: str, rna_chains: List[str],op_dir:str):
+def get_residue_in_contact(pdb_path: str, rna_chains: List[str], op_dir: str):
     p1 = subprocess.Popen(
         f"awk -vrna_chains='{','.join(rna_chains)}' -f /opt/filter-residues.awk < {op_dir}//{pdb_path.split('/')[-1].split('.')[0]}.hb2 ",
         stdout=subprocess.PIPE,
@@ -142,6 +142,6 @@ def get_hbplus_result(pdb_path: str, rna_chains: List[str]):
 
     output_file = NamedTemporaryFile(suffix=".tsv", delete=False)
     get_filtered_hydrogen_bonds(pdb_path, rna_chains, output_file.name, op_dir)
-    residues_in_contact = get_residue_in_contact(pdb_path, rna_chains,op_dir)
+    residues_in_contact = get_residue_in_contact(pdb_path, rna_chains, op_dir)
     shutil.rmtree(op_dir, ignore_errors=True)
     return output_file.name, residues_in_contact

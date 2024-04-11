@@ -15,20 +15,19 @@ from rnapolis import parser, annotator, tertiary
 from contact_utils import (
     ChainsSelect,
     FileType,
-    ModelsSelect,
-    ProcessingException,
     ResiduesSelect,
     get_file,
     split_structure_to_hermetic_chains,
     structure_cif_filter,
 )
 from hbplus_process_cif import MoleculeType, get_hbplus_result_for_large_structure
-from hbplus_process_pdb import get_hbplus_result
 
 
 @dataclass
-class DNAProtLigandResult:
+class InContactResult:
     hb_path_tsv: str = ""
+    full_motif_cif: str = ""
+    full_motif_fasta: str = ""
     in_contact = set()
     in_contact_desc = dict()
     dot_bracket_file_path: str = ""
@@ -39,6 +38,8 @@ class DNAProtLigandResult:
     dna_file_fasta: str = ""
     rna_file_cif: str = ""
     rna_file_fasta: str = ""
+    ion_file_cif: str = ""
+    ion_file_fasta: str = ""
 
 
 CIF_HEADER = [
@@ -63,20 +64,23 @@ CIF_HEADER = [
 ]
 
 
-def find_contact_ion(pdb_id: str, model: int, chains: List[str]):
+def find_contact_ion(
+    pdb_id: str, model: int, chains: List[str], result: InContactResult
+):
     output_path = ""
     motif_residues_clean = set()
-    in_contact_desc=dict()
-    in_contact=set()
-    structure_file_path, file_type = get_file(pdb_id, model, FileType.CIF,save_ions=True,ligands=False)
+    structure_file_path, file_type = get_file(
+        pdb_id, model, FileType.CIF, save_ions=True, ligands=False
+    )
     for chain in chains:
         with NamedTemporaryFile(suffix=".cif") as structure_file_copy_cif:
-            structure_file_copy_cif.write(open(structure_file_path,'rb').read())
-            output_path=''
+            structure_file_copy_cif.write(open(structure_file_path, "rb").read())
+            output_path = ""
             with NamedTemporaryFile(suffix=".pdb") as structure_file_path_pdb:
-                
+
                 structure_cif_filter(
-                    structure_file_copy_cif.name, ChainsSelect(chain, save_ions=True,ligands=False)
+                    structure_file_copy_cif.name,
+                    ChainsSelect(chain, save_ions=True, ligands=False),
                 )
 
                 response = requests.post(
@@ -86,11 +90,9 @@ def find_contact_ion(pdb_id: str, model: int, chains: List[str]):
                     timeout=10000,
                 )
                 if response.status_code == 200:
-                    with open(
-                        structure_file_path_pdb.name, "wb"
-                    ) as pdb_file_output:
+                    with open(structure_file_path_pdb.name, "wb") as pdb_file_output:
                         pdb_file_output.write(response.content)
-                
+
                 interaction_identificaton = subprocess.Popen(
                     f"/opt/fingernat/code/fingeRNAt.py -r {structure_file_path_pdb.name} -f SIMPLE",
                     stdout=subprocess.PIPE,
@@ -100,7 +102,7 @@ def find_contact_ion(pdb_id: str, model: int, chains: List[str]):
                 output_path = (
                     interaction_identificaton.communicate()[0].decode("utf-8").strip()
                 )
-            if output_path=='':
+            if output_path == "":
                 continue
             filter_awk = subprocess.Popen(
                 f"""
@@ -138,25 +140,37 @@ def find_contact_ion(pdb_id: str, model: int, chains: List[str]):
             for residue in motif_residues.split(","):
                 if residue.split(".")[0] in chains:
                     motif_residues_clean.add(residue)
-            tb = pd.read_csv(output_path,sep='\t')
-            tb= tb.set_axis([tb.columns[0]]+['.'.join(name.split('#')[1].split(':')[::-1]) for name in tb.columns[1:]],axis=1)
-            tb['Ligand_name']=(tb['Ligand_name'].str.split(':').str[1:3].str[::-1]).apply('.'.join) + ":" +tb['Ligand_name'].str.split(':').str[0]
-            tb=tb.rename({'Ligand_name':'ion'},axis=1)
-            tb=tb.T
-            tb.columns=tb.iloc[0]
-            tb=tb[1:]
-            for ion in  list(tb.columns):
-                ion_name=ion.split(':')
-                for residue in list(tb[tb[ion]==1].index):
-                    if residue not in in_contact_desc.keys():
-                        in_contact_desc[residue]=[]
-                    in_contact_desc[residue].append([ion_name[0],ion_name[1],MoleculeType.ION])
-            in_contact.update(list(in_contact_desc.keys()))
+            tb = pd.read_csv(output_path, sep="\t")
+            tb = tb.set_axis(
+                [tb.columns[0]]
+                + [
+                    ".".join(name.split("#")[1].split(":")[::-1])
+                    for name in tb.columns[1:]
+                ],
+                axis=1,
+            )
+            tb["Ligand_name"] = (
+                (tb["Ligand_name"].str.split(":").str[1:3].str[::-1]).apply(".".join)
+                + ":"
+                + tb["Ligand_name"].str.split(":").str[0]
+            )
+            tb = tb.rename({"Ligand_name": "ion"}, axis=1)
+            tb = tb.T
+            tb.columns = tb.iloc[0]
+            tb = tb[1:]
+            for ion in list(tb.columns):
+                ion_name = ion.split(":")
+                for residue in list(tb[tb[ion] == 1].index):
+                    if residue not in result.in_contact_desc.keys():
+                        result.in_contact_desc[residue] = []
+                    result.in_contact_desc[residue].append(
+                        [ion_name[0], ion_name[1], MoleculeType.ION]
+                    )
+                result.in_contact.add(ion_name[0])
+    result.in_contact.update(list(result.in_contact_desc.keys()))
     structure_cif_filter(
         structure_file_path, ResiduesSelect(list(motif_residues_clean))
     )
-    
-    return structure_file_path, in_contact,in_contact_desc
 
 
 def get_dot_bracket_and_filter(rna_file_path, in_contact):
@@ -174,7 +188,7 @@ def get_dot_bracket_and_filter(rna_file_path, in_contact):
         mapping = tertiary.Mapping2D3D(
             structure3d, structure2d.basePairs, structure2d.stackings, False
         )
-        structure_cif_filter(rna_file_path, ResiduesSelect(in_contact,ligands=False))
+        structure_cif_filter(rna_file_path, ResiduesSelect(in_contact, ligands=False))
         struct3d = dict()  # chain,seq_id,pairing
         for i, nucleotide in enumerate(
             [
@@ -263,63 +277,41 @@ def get_dssp_and_filter(cif_prot_file_path, in_contact):
 
 
 def find_contact_hybrid_ligand_protein(
-    pdb_id: str, model: int, chains: List[str]
-) -> DNAProtLigandResult:
-    result = DNAProtLigandResult()
+    pdb_id: str, model: int, chains: List[str], result: InContactResult
+):
     hb_path_tsv = ""
     in_contact = set()
-    structure_file_path, file_type = get_file(pdb_id, model, FileType.CIF,save_ions=False,ligands=True)
-    hb_path_tsv, in_contact, in_contact_desc = get_hbplus_result_for_large_structure(
-        structure_file_path, chains
+    structure_file_path, file_type = get_file(
+        pdb_id, model, FileType.CIF, save_ions=False, ligands=True
+    )
+    result.hb_path_tsv, in_contact, in_contact_desc = (
+        get_hbplus_result_for_large_structure(structure_file_path, chains)
     )
     result.hb_path_tsv = hb_path_tsv
-    result.in_contact = in_contact
-    result.in_contact_desc = in_contact_desc
-
-    structure_file_path_cif, _ = get_file(pdb_id, model, FileType.CIF)
-    rna_file = NamedTemporaryFile(suffix="_RNA.cif", delete=False)
-    dna_file = NamedTemporaryFile(suffix="_DNA.cif", delete=False)
-    protein_file = NamedTemporaryFile(suffix="_PROTEIN.cif", delete=False)
-    split_structure_to_hermetic_chains(
-        structure_file_path_cif,
-        [rna_file.name, dna_file.name, protein_file.name],
-        model,
-    )
-
-    result.dot_bracket_file_path = get_dot_bracket_and_filter(rna_file.name, in_contact)
-    cmd.delete("all")
-    cmd.load(rna_file.name, f"{pdb_id.upper()}_RNA", quiet=1)
-    cmd.save(rna_file.name.split(".")[0] + ".fasta", quiet=1)
-
-    result.rna_file_cif = rna_file.name
-    result.rna_file_fasta = rna_file.name.split(".")[0] + ".fasta"
-
-    try:
-        structure_cif_filter(dna_file.name, ResiduesSelect(in_contact))
-        cmd.delete("all")
-        cmd.load(dna_file.name, f"{pdb_id.upper()}_DNA", quiet=1)
-        cmd.save(dna_file.name.split(".")[0] + ".fasta", quiet=1)
-        result.dna_file_cif = dna_file.name
-        result.dna_file_fasta = dna_file.name.split(".")[0] + ".fasta"
-    except ValueError:
-        os.remove(dna_file.name)
-    try:
-        get_dssp_and_filter(protein_file.name, in_contact)
-        cmd.delete("all")
-        cmd.load(protein_file.name, f"{pdb_id.upper()}_PROTEIN", quiet=1)
-        cmd.save(protein_file.name.split(".")[0] + ".fasta", quiet=1)
-        result.protein_file_cif = protein_file.name
-        result.protein_file_fasta = protein_file.name.split(".")[0] + ".fasta"
-    except ValueError:
-        os.remove(protein_file.name)
-    return result
+    result.in_contact.update(in_contact)
+    for kres, res in in_contact_desc.items():
+        if kres in result.in_contact_desc:
+            result.in_contact_desc[kres].extend(res)
+        else:
+            result.in_contact_desc[kres] = res
 
 
 if __name__ == "__main__":
-
-    print(
-        find_contact_hybrid_ligand_protein(
-            sys.argv[1], int(sys.argv[2]), sys.argv[3].split(",")
-        )
+    pdb_id = sys.argv[1]
+    model = int(sys.argv[2])
+    chains = sys.argv[3].split(",")
+    result = find_contact_hybrid_ligand_protein(pdb_id, model, chains)
+    ion_motif_cif, ion_in_contact, ion_in_contact_desc = find_contact_ion(
+        pdb_id, model, chains
     )
-    print(find_contact_ion(sys.argv[1], int(sys.argv[2]), sys.argv[3].split(",")))
+    result.in_contact.update(ion_in_contact)
+    cmd.delete("all")
+    cmd.load(ion_motif_cif, f"{pdb_id.upper()}_ION", quiet=1)
+    cmd.save(ion_motif_cif.split(".")[0] + ".fasta", quiet=1)
+    result.ion_file_cif = ion_motif_cif
+    result.ion_file_fasta = ion_motif_cif.split(".")[0] + ".fasta"
+    for kres, res in ion_in_contact_desc.items():
+        if kres in result.in_contact_desc:
+            result.in_contact_desc[kres].extend(res)
+        else:
+            result.in_contact_desc[kres] = kres

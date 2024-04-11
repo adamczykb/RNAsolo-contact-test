@@ -3,7 +3,6 @@ import os
 import shutil
 import subprocess
 import time
-import traceback
 import numpy as np
 import os
 import pandas as pd
@@ -20,9 +19,8 @@ from contact_utils import (
     ChainsSelect,
     ProcessingException,
 )
-from show_chain_molecule_type_CIF import calc
+from classify_chain_molecule import calc
 from Bio.PDB import MMCIFParser
-from Bio.PDB import PDBIO
 from Bio.PDB.mmcifio import MMCIFIO
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from multiprocessing import Lock, Pool
@@ -55,12 +53,12 @@ class MoleculeType(Enum):
 
 def check_molecule(residue):
     hetflag, resseq, icode = residue.get_id()
-    if hetflag != " " and hetflag != "W" and len(residue)>1:
+    if hetflag != " " and hetflag != "W" and len(residue) > 1:
         return MoleculeType.LIGAND
-    
-    if hetflag != " " and hetflag != "W" and len(residue)==1:
+
+    if hetflag != " " and hetflag != "W" and len(residue) == 1:
         return MoleculeType.ION
-    
+
     if residue.resname in DNA_DICT:
         return MoleculeType.DNA
 
@@ -103,12 +101,18 @@ def process_append_result(
     os.mkdir(op_dir)
     os.chdir(op_dir)
     with NamedTemporaryFile(suffix=f"_{dna_prot_lig_residue}.pdb") as temp_file_pdb:
-        with NamedTemporaryFile(suffix=f"_{dna_prot_lig_residue}.cif",delete=False) as temp_file_cif:
-            io.save(temp_file_cif.name, ChainsSelect([rna_residue, dna_prot_lig_residue]))
+        with NamedTemporaryFile(
+            suffix=f"_{dna_prot_lig_residue}.cif", delete=False
+        ) as temp_file_cif:
+            io.save(
+                temp_file_cif.name, ChainsSelect([rna_residue, dna_prot_lig_residue])
+            )
 
             struct_dict = MMCIF2Dict(temp_file_cif.name)
             temp_list = np.array(struct_dict["_atom_site.auth_asym_id"])
-            struct_dict["_atom_site.label_seq_id"]=struct_dict["_atom_site.auth_seq_id"]
+            struct_dict["_atom_site.label_seq_id"] = struct_dict[
+                "_atom_site.auth_seq_id"
+            ]
 
             if dna_prot_lig_residue != "R" and rna_residue != "D":
                 temp_list = np.where(
@@ -197,45 +201,53 @@ def process_append_result(
                     0
                 ]
                 for index, row in df.iterrows():
-                    
+
                     if row["donor"][0] == "R" and row["acceptor"][0] != "R":
-                        key=f'{rna_residue}.{int("".join(row["donor"][1:]).split("-", maxsplit=1)[0])}' 
+                        key = f'{rna_residue}.{int("".join(row["donor"][1:]).split("-", maxsplit=1)[0])}'
                         if rna_residue not in in_contact_description.keys():
-                            in_contact_description[
-                            key 
-                            ] = []
+                            in_contact_description[key] = []
                         res_id = int(
                             "".join(row["acceptor"][1:]).split("-", maxsplit=1)[0]
                         )
                         try:
                             residue = structure_to_analyze[dna_prot_lig_residue][res_id]
                         except KeyError:
-                            residue = structure_to_analyze[dna_prot_lig_residue][(f'H_{"".join(row["acceptor"][1:]).split("-", maxsplit=1)[1]}',res_id,' ')]
-                        in_contact_description[
-                            key
-                        ].append(
+                            residue = structure_to_analyze[dna_prot_lig_residue][
+                                (
+                                    f'H_{"".join(row["acceptor"][1:]).split("-", maxsplit=1)[1]}',
+                                    res_id,
+                                    " ",
+                                )
+                            ]
+                        in_contact_description[key].append(
                             (
-                                f"{dna_prot_lig_residue}.{res_id}",residue.resname, check_molecule(residue)
+                                f"{dna_prot_lig_residue}.{res_id}",
+                                residue.resname,
+                                check_molecule(residue),
                             )
                         )
                     elif row["donor"][0] != "R" and row["acceptor"][0] == "R":
-                        key=f'{rna_residue}.{int("".join(row["acceptor"][1:]).split("-", maxsplit=1)[0])}'
+                        key = f'{rna_residue}.{int("".join(row["acceptor"][1:]).split("-", maxsplit=1)[0])}'
                         if rna_residue not in in_contact_description.keys():
-                            in_contact_description[
-                                key
-                            ] = []
+                            in_contact_description[key] = []
                         res_id = int(
                             "".join(row["donor"][1:]).split("-", maxsplit=1)[0]
                         )
                         try:
                             residue = structure_to_analyze[dna_prot_lig_residue][res_id]
                         except KeyError:
-                            residue = structure_to_analyze[dna_prot_lig_residue][(f'H_{"".join(row["donor"][1:]).split("-", maxsplit=1)[1]}',res_id,' ')]
-                        in_contact_description[
-                            key
-                        ].append(
+                            residue = structure_to_analyze[dna_prot_lig_residue][
+                                (
+                                    f'H_{"".join(row["donor"][1:]).split("-", maxsplit=1)[1]}',
+                                    res_id,
+                                    " ",
+                                )
+                            ]
+                        in_contact_description[key].append(
                             (
-                                f"{dna_prot_lig_residue}.{res_id}",residue.resname, check_molecule(residue)
+                                f"{dna_prot_lig_residue}.{res_id}",
+                                residue.resname,
+                                check_molecule(residue),
                             )
                         )
 
@@ -297,13 +309,13 @@ def process_append_result(
                     local_in_contact, np.where(local_in_contact == "")
                 )
                 local_in_contact = np.char.replace(
-                    local_in_contact, "D", dna_prot_lig_residue
+                    local_in_contact, "D", f'{dna_prot_lig_residue}.'
                 )
-                local_in_contact = np.char.replace(local_in_contact, "R", rna_residue)
+                local_in_contact = np.char.replace(local_in_contact, "R",f'{rna_residue}.' )
             except:
                 pass
     shutil.rmtree(op_dir, ignore_errors=True)
-    return local_in_contact,in_contact_description
+    return local_in_contact, in_contact_description
 
 
 def get_hbplus_result_for_large_structure(
@@ -334,8 +346,6 @@ def get_hbplus_result_for_large_structure(
         columns=TSV_COLUMNS,
     )
     df.to_csv(output_file.name, sep="\t")
-    print(molecule_chains)
-
     with Pool(
         processes=14,
         initializer=init_processing_locks,
@@ -376,8 +386,6 @@ def get_hbplus_result_for_large_structure(
                     in_contact_desc[key].extend(value)
                 else:
                     in_contact_desc[key] = value
-
-
 
         df = pd.read_csv(output_file.name, sep="\t")
         df.drop(["hydrogen_bonds_no", "Unnamed: 0"], axis=1, inplace=True)

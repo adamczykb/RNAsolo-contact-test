@@ -1,7 +1,6 @@
 import Bio
 import sys
 from Bio.PDB import MMCIFParser
-from Bio.PDB.mmcifio import MMCIFIO
 
 dna_dict = [ "DT", "DA", "DC", "DG" ]
 rna_dict = [ "A", "C", "G", "U" ]
