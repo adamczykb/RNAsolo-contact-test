@@ -16,7 +16,10 @@ from contact_utils import (
     DNA_DICT,
     PROTEIN_DICT,
     RNA_DICT,
+    TSV_COLUMNS,
     ChainsSelect,
+    ContactResidue,
+    MoleculeType,
     ProcessingException,
 )
 from classify_chain_molecule import calc
@@ -26,29 +29,7 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from multiprocessing import Lock, Pool
 
 
-TSV_COLUMNS = [
-    "donor",
-    "donor_atom",
-    "acceptor",
-    "acceptor_atom",
-    "distance",
-    "atom_categories",
-    "donor_acceptor_groups_gap",
-    "CA_atoms_donor_acceptor_distance",
-    "hydrogen_donor_acceptor_angle",
-    "hydrogen_acceptor_distance",
-    "acceptor_hydrogen_antecedent_angle",
-    "donor_acceptor_antecedent_angle",
-    "hydrogen_bonds_no",
-]
 
-
-class MoleculeType(Enum):
-    DNA = 0
-    RNA = 1
-    LIGAND = 2
-    ION = 3
-    PROTEIN = 4
 
 
 def check_molecule(residue):
@@ -221,9 +202,9 @@ def process_append_result(
                             ]
                         in_contact_description[key].append(
                             (
-                                f"{dna_prot_lig_residue}.{res_id}",
+                                ContactResidue(f"{dna_prot_lig_residue}.{res_id}",
                                 residue.resname,
-                                check_molecule(residue),
+                                check_molecule(residue))
                             )
                         )
                     elif row["donor"][0] != "R" and row["acceptor"][0] == "R":
@@ -245,9 +226,9 @@ def process_append_result(
                             ]
                         in_contact_description[key].append(
                             (
-                                f"{dna_prot_lig_residue}.{res_id}",
+                                ContactResidue(f"{dna_prot_lig_residue}.{res_id}",
                                 residue.resname,
-                                check_molecule(residue),
+                                check_molecule(residue))
                             )
                         )
 

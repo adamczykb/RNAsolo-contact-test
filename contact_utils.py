@@ -1,4 +1,5 @@
 import copy
+from dataclasses import dataclass
 import Bio
 import requests
 
@@ -16,6 +17,89 @@ from enum import Enum
 
 class ProcessingException(Exception):
     pass
+
+
+class MoleculeType(Enum):
+    DNA = 0
+    RNA = 1
+    LIGAND = 2
+    ION = 3
+    PROTEIN = 4
+
+
+@dataclass
+class ContactResidue:
+    resid: str
+    value: str
+    mtype: MoleculeType
+
+    def __hash__(self) -> int:
+        hash(self.resid)
+
+    def __getitem__(self, indx):
+        match indx:
+            case 0:
+                return self.resid
+            case 1:
+                return self.value
+            case 2:
+                return self.mtype
+
+
+@dataclass
+class InContactResult:
+    hb_path_tsv: str = ""
+    full_motif_cif: str = ""
+    full_motif_fasta: str = ""
+    in_contact = set()
+    in_contact_desc = dict()
+    dot_bracket_file_path: str = ""
+    dssp_file_path: str = ""
+    protein_file_cif: str = ""
+    protein_file_fasta: str = ""
+    dna_file_cif: str = ""
+    dna_file_fasta: str = ""
+    rna_file_cif: str = ""
+    rna_file_fasta: str = ""
+    ion_file_cif: str = ""
+    ion_file_fasta: str = ""
+
+
+CIF_HEADER = [
+    "group_PDB",
+    "id",
+    "type_symbol",
+    "label_atom_id",
+    "label_alt_id",
+    "label_comp_id",
+    "label_asym_id",
+    "label_entity_id",
+    "label_seq_id",
+    "pdbx_PDB_ins_code",
+    "Cartn_x",
+    "Cartn_y",
+    "Cartn_z",
+    "occupancy",
+    "B_iso_or_equiv",
+    "auth_seq_id",
+    "auth_asym_id",
+    "pdbx_PDB_model_num",
+]
+TSV_COLUMNS = [
+    "donor",
+    "donor_atom",
+    "acceptor",
+    "acceptor_atom",
+    "distance",
+    "atom_categories",
+    "donor_acceptor_groups_gap",
+    "CA_atoms_donor_acceptor_distance",
+    "hydrogen_donor_acceptor_angle",
+    "hydrogen_acceptor_distance",
+    "acceptor_hydrogen_antecedent_angle",
+    "donor_acceptor_antecedent_angle",
+    "hydrogen_bonds_no",
+]
 
 
 class FileType(Enum):
@@ -66,7 +150,12 @@ def molecule_chain_assigment(structure: Bio.PDB.Structure) -> Tuple[dict, dict]:
         distribution[model.id] = {}
         result_molecule_type[model.id] = {}
         for chain in model:
-            distribution[model.id][chain.id] = {"RNA": 0, "DNA": 0, "Protein": 0,"ION":0}
+            distribution[model.id][chain.id] = {
+                "RNA": 0,
+                "DNA": 0,
+                "Protein": 0,
+                "ION": 0,
+            }
             for residue in chain:
                 res = residue.get_resname().strip()
                 if res in PROTEIN_DICT:
@@ -81,7 +170,9 @@ def molecule_chain_assigment(structure: Bio.PDB.Structure) -> Tuple[dict, dict]:
                     distribution[model.id][chain.id]["RNA"] = (
                         distribution[model.id][chain.id].pop("RNA") + 1
                     )
-                elif residue.id[0]!=" " and residue.id[0]!="W" and len(residue)==1:
+                elif (
+                    residue.id[0] != " " and residue.id[0] != "W" and len(residue) == 1
+                ):
                     distribution[model.id][chain.id]["ION"] = (
                         distribution[model.id][chain.id].pop("ION") + 1
                     )
@@ -103,7 +194,7 @@ def structure_chain_molecules(structure):
     """
     result_molecule_type, distribution = molecule_chain_assigment(structure)
 
-    chain_assigment = {"RNA": {}, "DNA": {}, "PROT": {},"ION":{0:[]}}
+    chain_assigment = {"RNA": {}, "DNA": {}, "PROT": {}, "ION": {}}
     for model in structure:
         for chain in model:
             if (
@@ -186,17 +277,17 @@ class ChainsSelect(Select):
                 and len(residue) == 1
             )
         )
- 
+
 
 class ResiduesSelect(Select):
-    def __init__(self, r, ligands=True):
+    def __init__(self, r):
         self.residues = set(r)
 
     def accept_residue(self, residue):
         res_id = f"{residue.get_parent().id}.{residue.id[1]}"
         if residue.id[2] != " ":
             res_id = res_id + residue.id[2]
-        return (res_id in self.residues and residue.id[0] != "W")
+        return res_id in self.residues and residue.id[0] != "W"
 
 
 def structure_filter(pdb_file_path: str, selector: Select):
@@ -287,19 +378,38 @@ def get_file(
                 return get_cif()
 
 
-def split_structure_to_hermetic_chains(cif_file_path, files_paths, model):
+def split_structure_to_hermetic_chains(
+    cif_file_path, files_paths, model, in_contact_desc
+):
     structure = MMCIFParser(QUIET=True).get_structure("str", cif_file_path)
-    distribution = structure_chain_molecules(structure)
-
-    for idx, molecule in enumerate(["RNA", "DNA", "PROT",'ION']):
+    # distribution = structure_chain_molecules(structure)
+    residue_assigment = {
+        "RNA": set(),
+        "DNA": set(),
+        "PROT": set(),
+        "ION": set(),
+        "LIG": set(),
+    }
+    for key, value in in_contact_desc.items():
+        for res in value:
+            match res[2]:
+                case MoleculeType.DNA:
+                    residue_assigment["DNA"].add(res[0])
+                case MoleculeType.LIGAND:
+                    residue_assigment["LIG"].add(res[0])
+                case MoleculeType.PROTEIN:
+                    residue_assigment["PROT"].add(res[0])
+                case MoleculeType.ION:
+                    residue_assigment["ION"].add(res[0])
+    residue_assigment["RNA"].update(list(in_contact_desc.keys()))
+    for idx, molecule in enumerate(list(residue_assigment.keys())):
         local_struct = copy.deepcopy(structure)
         io = MMCIFIO()
         io.set_structure(local_struct)
-        
         try:
             io.save(
                 files_paths[idx],
-                ChainsSelect(distribution[molecule][model - 1], ligands=True, save_ions=True) ,
+                ResiduesSelect(residue_assigment[molecule]),
             )
         except:
             pass

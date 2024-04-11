@@ -10,23 +10,23 @@ import pandas as pd
 
 from tempfile import NamedTemporaryFile
 
-from contact_utils import ProcessingException
+from contact_utils import TSV_COLUMNS, ProcessingException
 
-TSV_COLUMNS = [
-    "donor",
-    "donor_atom",
-    "acceptor",
-    "acceptor_atom",
-    "distance",
-    "atom_categories",
-    "donor_acceptor_groups_gap",
-    "CA_atoms_donor_acceptor_distance",
-    "hydrogen_donor_acceptor_angle",
-    "hydrogen_acceptor_distance",
-    "acceptor_hydrogen_antecedent_angle",
-    "donor_acceptor_antecedent_angle",
-    "hydrogen_bonds_no",
-]
+# TSV_COLUMNS = [
+#     "donor",
+#     "donor_atom",
+#     "acceptor",
+#     "acceptor_atom",
+#     "distance",
+#     "atom_categories",
+#     "donor_acceptor_groups_gap",
+#     "CA_atoms_donor_acceptor_distance",
+#     "hydrogen_donor_acceptor_angle",
+#     "hydrogen_acceptor_distance",
+#     "acceptor_hydrogen_antecedent_angle",
+#     "donor_acceptor_antecedent_angle",
+#     "hydrogen_bonds_no",
+# ]
 
 
 def get_filtered_hydrogen_bonds(
